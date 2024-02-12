@@ -42,9 +42,7 @@ impl StorageAdapter for LocalStorage {
     }
 
     async fn load(&self, location: String) -> Result<Bytes> {
-        let file = fs::File::open(location)?;
-
-        let bytes = Bytes::from(file);
+        let bytes = Bytes::from(fs::read(location)?);
 
         Ok(bytes)
     }
@@ -76,32 +74,37 @@ impl S3Adapter {
             retries,
         })
     }
+}
 
-    async fn _save_retried(&self, location: String, data: &Bytes) {
-        for i in 0..self.retries {
-            let result = self.bucket.put_object(
-                location.clone(),
-                data,
-            ).await;
+async fn _save_retried(bucket: Bucket, location: String, data: Bytes, retries: usize) {
+    for i in 0..retries {
+        let result = bucket.put_object(
+            location.clone(),
+            &data,
+        ).await;
 
-            if result.is_ok() {
-                return;
-            }
-
-            // Retry logic.
-            time::sleep(Duration::from_millis(
-                100 * (1.2 ** i as f32) as u64
-            )).await;
+        if result.is_ok() {
+            return;
         }
 
-        // TODO: logging
+        // Retry logic.
+        time::sleep(Duration::from_millis(
+            100 * (1.2_f32.powi(i as i32)) as u64
+        )).await;
     }
+
+    // TODO: logging
 }
 
 impl StorageAdapter for S3Adapter {
     async fn save(&self, location: String, data: &Bytes) -> Result<()> {
         // Asynchronously upload.
-        task::spawn(self.upload(location, data));
+        task::spawn(_save_retried(
+            self.bucket.clone(),
+            location,
+            data.clone(), // TODO: This copy sucks.
+            self.retries,
+        ));
 
         Ok(())
     }
